@@ -1,0 +1,275 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Log Parser</title>
+<style>
+  :root { --border: #d0d7de; --bg: #f6f8fa; }
+  * { box-sizing: border-box; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    margin: 0; padding: 20px; background: var(--bg); color: #1f2328;
+  }
+  h1 { font-size: 22px; margin: 0 0 16px; }
+  textarea#logInput {
+    width: 100%; height: 180px;
+    font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 12px;
+    padding: 10px; border: 1px solid var(--border); border-radius: 6px; resize: vertical;
+  }
+  .layout { display: grid; grid-template-columns: 240px 1fr; gap: 16px; margin-top: 16px; }
+  .panel { background: white; border: 1px solid var(--border); border-radius: 6px; padding: 14px; }
+  .panel h2 { font-size: 13px; margin: 0 0 10px; color: #57606a; text-transform: uppercase; letter-spacing: .03em; }
+  .level-check { display: flex; align-items: center; gap: 6px; margin-bottom: 6px; font-size: 13px; }
+  .level-check label { cursor: pointer; }
+  input[type="text"] {
+    width: 100%; padding: 7px 9px; border: 1px solid var(--border); border-radius: 6px;
+    font-size: 13px; margin-bottom: 10px;
+  }
+  button {
+    padding: 7px 14px; border-radius: 6px; border: 1px solid var(--border);
+    background: #2da44e; color: white; font-size: 13px; cursor: pointer;
+  }
+  button.secondary { background: white; color: #1f2328; }
+  button:hover { filter: brightness(0.95); }
+  .stats { display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 14px; }
+  .stat-card { background: white; border: 1px solid var(--border); border-radius: 6px; padding: 10px 16px; font-size: 13px; }
+  .stat-card strong { font-size: 18px; display: block; }
+  .stat-error strong { color: #c92a2a; }
+  .stat-warn strong { color: #e8590c; }
+  .stat-info strong { color: #1971c2; }
+  .stat-debug strong { color: #57606a; }
+  table { width: 100%; border-collapse: collapse; font-size: 12px; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; }
+  th, td { padding: 6px 8px; text-align: left; border-bottom: 1px solid var(--border); vertical-align: top; }
+  th { background: #f6f8fa; color: #57606a; position: sticky; top: 0; }
+  tr.level-ERROR { background: #ffe3e3; }
+  tr.level-WARN { background: #fff3bf; }
+  tr.level-INFO { background: white; }
+  tr.level-DEBUG { background: #f1f3f5; }
+  mark { background: #ffd43b; padding: 0 1px; border-radius: 2px; }
+  .badge { display: inline-block; padding: 1px 7px; border-radius: 10px; font-size: 11px; font-weight: 600; }
+  .badge-ERROR { background: #c92a2a; color: white; }
+  .badge-WARN { background: #e8590c; color: white; }
+  .badge-INFO { background: #1971c2; color: white; }
+  .badge-DEBUG { background: #57606a; color: white; }
+  .table-wrap { max-height: 480px; overflow: auto; border: 1px solid var(--border); border-radius: 6px; }
+  .empty-state { padding: 24px; text-align: center; color: #57606a; }
+  .group-section { margin-bottom: 16px; }
+  .group-title { font-weight: 600; margin: 14px 0 6px; font-size: 13px; color: #57606a; }
+  .toolbar { display: flex; gap: 10px; margin-bottom: 12px; align-items: center; }
+  .meta { font-size: 12px; color: #57606a; margin-top: 6px; }
+</style>
+</head>
+<body>
+  <h1>Log Parser</h1>
+
+  <textarea id="logInput" placeholder="2024-01-15 10:23:01 ERROR [DatabaseService] Connection timeout
+2024-01-15 10:23:05 WARN [AuthService] Token expiring soon
+2024-01-15 10:24:12 INFO [ApiGateway] Request handled in 45ms"></textarea>
+
+  <div class="layout">
+    <div class="panel">
+      <h2>Filters</h2>
+      <div id="levelChecks"></div>
+      <input type="text" id="searchInput" placeholder="Full-text search..." />
+      <input type="text" id="componentFilter" placeholder="Filter by source/component..." />
+      <button id="parseBtn">Parse &amp; Filter</button>
+      <div class="meta" id="rangeInfo"></div>
+    </div>
+
+    <div>
+      <div class="stats" id="stats"></div>
+      <div class="toolbar">
+        <label style="font-size:13px; color:#57606a;"><input type="checkbox" id="groupToggle" /> Group by source/component</label>
+        <button id="exportBtn" class="secondary">Export filtered as CSV</button>
+      </div>
+      <div id="resultsContainer"><div class="empty-state">Paste a log above and click "Parse &amp; Filter".</div></div>
+    </div>
+  </div>
+
+<script>
+  const LEVELS = ['ERROR', 'WARN', 'INFO', 'DEBUG'];
+  const levelChecksEl = document.getElementById('levelChecks');
+  LEVELS.forEach(level => {
+    const id = `level-${level}`;
+    const wrap = document.createElement('div');
+    wrap.className = 'level-check';
+    wrap.innerHTML = `<input type="checkbox" id="${id}" checked /><label for="${id}">${level}</label>`;
+    levelChecksEl.appendChild(wrap);
+  });
+
+  // Matches: "2024-01-15 10:23:01" or ISO "2024-01-15T10:23:01.123Z" etc, then LEVEL, then optional [component]
+  const LOG_LINE_RE = /^\s*(\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2}(?:[.,]\d+)?(?:Z|[+-]\d{2}:?\d{2})?)?\s*(ERROR|WARN|WARNING|INFO|DEBUG|TRACE)?\s*(?:\[([^\]]+)\])?\s*(.*)$/i;
+
+  function normalizeLevel(raw) {
+    if (!raw) return null;
+    const upper = raw.toUpperCase();
+    if (upper === 'WARNING') return 'WARN';
+    if (upper === 'TRACE') return 'DEBUG';
+    return upper;
+  }
+
+  function parseLine(line, index) {
+    const m = line.match(LOG_LINE_RE);
+    let timestamp = null, level = null, component = null, message = line;
+    if (m) {
+      timestamp = m[1] ? parseTimestamp(m[1]) : null;
+      level = normalizeLevel(m[2]);
+      component = m[3] || null;
+      message = m[4] !== undefined ? m[4] : line;
+    }
+    return { index, raw: line, timestamp, level: level || 'INFO', component: component || '(unknown)', message };
+  }
+
+  function parseTimestamp(str) {
+    const isoish = /^\d{4}-\d{2}-\d{2} /.test(str) ? str.replace(' ', 'T') : str;
+    const d = new Date(isoish);
+    return isNaN(d.getTime()) ? null : d;
+  }
+
+  function escapeHtml(str) {
+    return String(str).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  }
+
+  function highlight(text, term) {
+    if (!term) return escapeHtml(text);
+    const escaped = escapeHtml(text);
+    const escapedTerm = term.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    return escaped.replace(new RegExp(`(${escapedTerm})`, 'gi'), '<mark>$1</mark>');
+  }
+
+  let lastFiltered = [];
+
+  function run() {
+    const text = document.getElementById('logInput').value;
+    const lines = text.split('\n').filter(l => l.trim() !== '');
+    const entries = lines.map(parseLine);
+
+    const activeLevels = new Set(LEVELS.filter(l => document.getElementById(`level-${l}`).checked));
+    const searchTerm = document.getElementById('searchInput').value.trim();
+    const componentTerm = document.getElementById('componentFilter').value.trim().toLowerCase();
+    const grouped = document.getElementById('groupToggle').checked;
+
+    const filtered = entries.filter(e => {
+      if (!activeLevels.has(e.level)) return false;
+      if (searchTerm && !e.raw.toLowerCase().includes(searchTerm.toLowerCase())) return false;
+      if (componentTerm && !e.component.toLowerCase().includes(componentTerm)) return false;
+      return true;
+    });
+
+    lastFiltered = filtered;
+    renderStats(entries, filtered);
+    renderRange(entries);
+    renderResults(filtered, searchTerm, grouped);
+  }
+
+  function renderStats(all, filtered) {
+    const counts = { ERROR: 0, WARN: 0, INFO: 0, DEBUG: 0 };
+    filtered.forEach(e => counts[e.level] = (counts[e.level] || 0) + 1);
+    const statsEl = document.getElementById('stats');
+    statsEl.innerHTML = `
+      <div class="stat-card">Total lines<strong>${all.length}</strong></div>
+      <div class="stat-card">Matching filter<strong>${filtered.length}</strong></div>
+      <div class="stat-card stat-error">Errors<strong>${counts.ERROR}</strong></div>
+      <div class="stat-card stat-warn">Warnings<strong>${counts.WARN}</strong></div>
+      <div class="stat-card stat-info">Info<strong>${counts.INFO}</strong></div>
+      <div class="stat-card stat-debug">Debug<strong>${counts.DEBUG}</strong></div>
+    `;
+  }
+
+  function renderRange(entries) {
+    const timestamps = entries.map(e => e.timestamp).filter(Boolean);
+    const rangeInfo = document.getElementById('rangeInfo');
+    if (timestamps.length === 0) {
+      rangeInfo.textContent = 'No parseable timestamps found.';
+      return;
+    }
+    const min = new Date(Math.min(...timestamps.map(d => d.getTime())));
+    const max = new Date(Math.max(...timestamps.map(d => d.getTime())));
+    rangeInfo.innerHTML = `<strong>Start:</strong> ${escapeHtml(min.toISOString())}<br><strong>End:</strong> ${escapeHtml(max.toISOString())}`;
+  }
+
+  function rowHtml(e, searchTerm) {
+    return `
+      <tr class="level-${e.level}">
+        <td>${e.timestamp ? escapeHtml(e.timestamp.toISOString()) : '<em>—</em>'}</td>
+        <td><span class="badge badge-${e.level}">${e.level}</span></td>
+        <td>${escapeHtml(e.component)}</td>
+        <td>${highlight(e.message, searchTerm)}</td>
+      </tr>`;
+  }
+
+  function tableHtml(entries, searchTerm) {
+    return `
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Timestamp</th><th>Level</th><th>Source</th><th>Message</th></tr></thead>
+          <tbody>${entries.map(e => rowHtml(e, searchTerm)).join('')}</tbody>
+        </table>
+      </div>`;
+  }
+
+  function renderResults(filtered, searchTerm, grouped) {
+    const container = document.getElementById('resultsContainer');
+    if (filtered.length === 0) {
+      container.innerHTML = '<div class="empty-state">No log lines match the current filters.</div>';
+      return;
+    }
+
+    if (!grouped) {
+      container.innerHTML = tableHtml(filtered, searchTerm);
+      return;
+    }
+
+    const groups = new Map();
+    filtered.forEach(e => {
+      if (!groups.has(e.component)) groups.set(e.component, []);
+      groups.get(e.component).push(e);
+    });
+
+    let html = '';
+    for (const [component, entries] of groups) {
+      html += `<div class="group-section"><div class="group-title">${escapeHtml(component)} (${entries.length})</div>${tableHtml(entries, searchTerm)}</div>`;
+    }
+    container.innerHTML = html;
+  }
+
+  function exportCsv() {
+    if (lastFiltered.length === 0) return;
+    const header = ['timestamp', 'level', 'component', 'message'];
+    const rows = lastFiltered.map(e => [
+      e.timestamp ? e.timestamp.toISOString() : '',
+      e.level,
+      e.component,
+      e.message,
+    ]);
+    const csvLines = [header, ...rows].map(row =>
+      row.map(field => {
+        const str = String(field);
+        if (/[",\n]/.test(str)) return `"${str.replace(/"/g, '""')}"`;
+        return str;
+      }).join(',')
+    );
+    const blob = new Blob([csvLines.join('\n')], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'filtered-logs.csv';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  }
+
+  document.getElementById('parseBtn').addEventListener('click', run);
+  document.getElementById('exportBtn').addEventListener('click', exportCsv);
+  document.getElementById('groupToggle').addEventListener('change', run);
+  ['searchInput', 'componentFilter'].forEach(id => {
+    document.getElementById(id).addEventListener('input', run);
+  });
+  LEVELS.forEach(level => {
+    document.getElementById(`level-${level}`).addEventListener('change', run);
+  });
+</script>
+</body>
+</html>
