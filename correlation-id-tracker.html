@@ -1,0 +1,253 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Correlation ID Tracker</title>
+<style>
+  :root { --border: #d0d7de; --bg: #f6f8fa; }
+  * { box-sizing: border-box; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    margin: 0; padding: 20px; background: var(--bg); color: #1f2328;
+  }
+  h1 { font-size: 22px; margin: 0 0 16px; }
+  textarea {
+    width: 100%; height: 200px;
+    font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 12px;
+    padding: 10px; border: 1px solid var(--border); border-radius: 6px; resize: vertical;
+  }
+  .controls { margin: 12px 0; display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+  input[type="text"] {
+    flex: 1; min-width: 220px; padding: 8px 10px; border: 1px solid var(--border); border-radius: 6px;
+    font-size: 13px; font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  }
+  button {
+    padding: 8px 16px; border-radius: 6px; border: 1px solid var(--border);
+    background: #2da44e; color: white; font-size: 14px; cursor: pointer;
+  }
+  button.secondary { background: white; color: #1f2328; }
+  button:hover { filter: brightness(0.95); }
+  .summary { display: flex; flex-wrap: wrap; gap: 10px; margin: 14px 0; }
+  .stat-card { background: white; border: 1px solid var(--border); border-radius: 6px; padding: 10px 16px; font-size: 13px; }
+  .stat-card strong { font-size: 16px; display: block; }
+  .timeline { background: white; border: 1px solid var(--border); border-radius: 6px; overflow: hidden; }
+  .event {
+    display: flex; gap: 14px; padding: 10px 14px; border-bottom: 1px solid var(--border);
+    font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 12px;
+  }
+  .event:last-child { border-bottom: none; }
+  .event.error { background: #ffe3e3; }
+  .event-time { flex: 0 0 110px; color: #57606a; }
+  .event-delta { flex: 0 0 90px; color: #57606a; }
+  .event-service { flex: 0 0 160px; font-weight: 600; }
+  .event-message { flex: 1; }
+  .empty-state { padding: 24px; text-align: center; color: #57606a; }
+  .found-ids { margin-top: 8px; font-size: 12px; color: #57606a; }
+  .found-ids button { font-size: 11px; padding: 2px 8px; margin: 2px; background: white; color: #1971c2; border-color: #1971c2; }
+</style>
+</head>
+<body>
+  <h1>Correlation ID Tracker</h1>
+
+  <textarea id="logInput" placeholder="[10:00:00.123] [api-gateway] [trace=abc-123-def] Received request GET /orders
+[10:00:00.145] [service-a] [trace=abc-123-def] Processing order lookup
+[10:00:00.190] [database] [trace=abc-123-def] Query executed in 23ms
+[10:00:00.456] [api-gateway] [trace=abc-123-def] Response sent (334ms total)
+[10:00:01.002] [api-gateway] [trace=xyz-999] Received request POST /login"></textarea>
+
+  <div class="controls">
+    <input type="text" id="traceIdInput" placeholder="Enter correlation / trace ID to track..." />
+    <button id="trackBtn">Track</button>
+    <button id="exportBtn" class="secondary">Export trace</button>
+  </div>
+  <div class="found-ids" id="foundIds"></div>
+
+  <div id="output"><div class="empty-state">Paste logs containing correlation/trace IDs, then enter an ID and click Track.</div></div>
+
+<script>
+  function escapeHtml(str) {
+    return String(str).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  }
+
+  // Recognizes "trace=ID", "traceId=ID", "correlationId: ID", "correlation-id=ID", "[ID]" style UUID/hex tokens, etc.
+  const ID_PATTERNS = [
+    /\b(?:trace[_-]?id|correlation[_-]?id|trace|cid|request[_-]?id)\s*[:=]\s*["']?([a-zA-Z0-9._-]+)["']?/i,
+  ];
+  // Fallback: any UUID-looking or dash-separated id-looking token in brackets
+  const GENERIC_ID_RE = /\b[a-f0-9]{8}-[a-f0-9-]{4,}\b|\b[a-zA-Z]+-\d+-[a-zA-Z0-9]+\b/i;
+
+  const TIMESTAMP_RE = /\[?(\d{1,4}[-:T]\d{1,2}[-:]\d{1,2}(?:[.,]\d+)?(?:Z)?)\]?/;
+  const SERVICE_RE = /\[([a-zA-Z0-9_.-]+)\]/g;
+
+  function extractId(line) {
+    for (const re of ID_PATTERNS) {
+      const m = line.match(re);
+      if (m) return m[1];
+    }
+    const m = line.match(GENERIC_ID_RE);
+    return m ? m[0] : null;
+  }
+
+  function extractTimestamp(line) {
+    const m = line.match(TIMESTAMP_RE);
+    if (!m) return null;
+    return m[1];
+  }
+
+  function timeToMs(timeStr) {
+    // Accept "HH:MM:SS.mmm" style; build a Date on an arbitrary day for ordering/diffing.
+    const parts = timeStr.split(/[:.,]/).map(Number);
+    if (parts.some(isNaN)) return null;
+    const [h = 0, m = 0, s = 0, ms = 0] = parts;
+    return ((h * 60 + m) * 60 + s) * 1000 + ms;
+  }
+
+  function extractService(line, idToken) {
+    SERVICE_RE.lastIndex = 0;
+    let m;
+    const brackets = [];
+    while ((m = SERVICE_RE.exec(line)) !== null) brackets.push(m[1]);
+    // The bracket containing the id token is not the service name; pick the first different one.
+    const candidate = brackets.find(b => !idToken || !b.includes(idToken));
+    return candidate || '(unknown)';
+  }
+
+  function findAllIds(text) {
+    const ids = new Set();
+    text.split('\n').forEach(line => {
+      const id = extractId(line);
+      if (id) ids.add(id);
+    });
+    return Array.from(ids);
+  }
+
+  function buildTrace(text, traceId) {
+    const lines = text.split('\n').filter(l => l.includes(traceId));
+    const events = lines.map(line => {
+      const ts = extractTimestamp(line);
+      const service = extractService(line, traceId);
+      const message = line
+        .replace(/\[[^\]]*\]/g, '')
+        .replace(new RegExp(traceId.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g'), '')
+        .replace(/\b(?:trace[_-]?id|correlation[_-]?id|trace|cid|request[_-]?id)\s*[:=]\s*["']?["']?/gi, '')
+        .trim();
+      return { raw: line, timestamp: ts, ms: ts ? timeToMs(ts) : null, service, message };
+    });
+
+    events.sort((a, b) => {
+      if (a.ms == null) return 1;
+      if (b.ms == null) return -1;
+      return a.ms - b.ms;
+    });
+
+    const withTime = events.filter(e => e.ms != null);
+    const startMs = withTime.length > 0 ? withTime[0].ms : null;
+    const endMs = withTime.length > 0 ? withTime[withTime.length - 1].ms : null;
+
+    events.forEach((e, i) => {
+      e.deltaFromStart = (e.ms != null && startMs != null) ? e.ms - startMs : null;
+      e.isError = /error|exception|fail|timeout/i.test(e.message);
+    });
+
+    return {
+      traceId,
+      events,
+      durationMs: (startMs != null && endMs != null) ? endMs - startMs : null,
+      services: [...new Set(events.map(e => e.service))],
+      errorCount: events.filter(e => e.isError).length,
+    };
+  }
+
+  let lastTrace = null;
+
+  function render(trace) {
+    const output = document.getElementById('output');
+    if (!trace || trace.events.length === 0) {
+      output.innerHTML = '<div class="empty-state">No log lines found containing that correlation ID.</div>';
+      document.querySelector('.summary')?.remove();
+      return;
+    }
+
+    const summaryHtml = `
+      <div class="summary">
+        <div class="stat-card">Events<strong>${trace.events.length}</strong></div>
+        <div class="stat-card">Services involved<strong>${trace.services.length}</strong></div>
+        <div class="stat-card">Total duration<strong>${trace.durationMs != null ? trace.durationMs + ' ms' : '—'}</strong></div>
+        <div class="stat-card">Errors/failures<strong>${trace.errorCount}</strong></div>
+      </div>`;
+
+    const timelineHtml = `
+      <div class="timeline">
+        ${trace.events.map(e => `
+          <div class="event ${e.isError ? 'error' : ''}">
+            <span class="event-time">${e.timestamp ? escapeHtml(e.timestamp) : '—'}</span>
+            <span class="event-delta">${e.deltaFromStart != null ? '+' + e.deltaFromStart + 'ms' : ''}</span>
+            <span class="event-service">${escapeHtml(e.service)}</span>
+            <span class="event-message">${escapeHtml(e.message || e.raw)}</span>
+          </div>
+        `).join('')}
+      </div>`;
+
+    output.innerHTML = summaryHtml + timelineHtml;
+  }
+
+  function run() {
+    const text = document.getElementById('logInput').value;
+    const traceId = document.getElementById('traceIdInput').value.trim();
+    const foundIdsEl = document.getElementById('foundIds');
+
+    const allIds = findAllIds(text);
+    if (allIds.length > 0) {
+      foundIdsEl.innerHTML = 'Detected IDs in log: ' + allIds.map(id =>
+        `<button class="id-pick" data-id="${escapeHtml(id)}">${escapeHtml(id)}</button>`
+      ).join(' ');
+      foundIdsEl.querySelectorAll('.id-pick').forEach(btn => {
+        btn.addEventListener('click', () => {
+          document.getElementById('traceIdInput').value = btn.dataset.id;
+          run();
+        });
+      });
+    } else {
+      foundIdsEl.textContent = '';
+    }
+
+    if (!traceId) {
+      document.getElementById('output').innerHTML = '<div class="empty-state">Enter a correlation/trace ID (or pick one of the detected IDs above) and click Track.</div>';
+      lastTrace = null;
+      return;
+    }
+
+    lastTrace = buildTrace(text, traceId);
+    render(lastTrace);
+  }
+
+  document.getElementById('trackBtn').addEventListener('click', run);
+  document.getElementById('traceIdInput').addEventListener('keydown', e => { if (e.key === 'Enter') run(); });
+
+  document.getElementById('exportBtn').addEventListener('click', () => {
+    if (!lastTrace || lastTrace.events.length === 0) return;
+    const lines = [
+      `Trace ID: ${lastTrace.traceId}`,
+      `Events: ${lastTrace.events.length}`,
+      `Services: ${lastTrace.services.join(', ')}`,
+      `Duration: ${lastTrace.durationMs != null ? lastTrace.durationMs + 'ms' : 'unknown'}`,
+      '',
+      ...lastTrace.events.map(e => `[${e.timestamp || '?'}] (+${e.deltaFromStart != null ? e.deltaFromStart + 'ms' : '?'}) ${e.service}: ${e.message}`),
+    ];
+    const blob = new Blob([lines.join('\n')], { type: 'text/plain;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `trace-${lastTrace.traceId}.txt`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  });
+
+  // Initial scan to populate detected IDs from the placeholder-less textarea once user pastes.
+  document.getElementById('logInput').addEventListener('input', run);
+</script>
+</body>
+</html>
