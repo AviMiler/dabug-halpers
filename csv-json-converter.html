@@ -1,0 +1,350 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>CSV ↔ JSON Converter</title>
+<style>
+  :root { --border: #d0d7de; --bg: #f6f8fa; }
+  * { box-sizing: border-box; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    margin: 0; padding: 20px; background: var(--bg); color: #1f2328;
+  }
+  h1 { font-size: 22px; margin: 0 0 16px; }
+  .tabs { display: flex; gap: 8px; margin-bottom: 14px; }
+  .tab-btn {
+    padding: 8px 16px; border-radius: 6px; border: 1px solid var(--border);
+    background: white; color: #1f2328; font-size: 14px; cursor: pointer;
+  }
+  .tab-btn.active { background: #2da44e; color: white; border-color: #2da44e; }
+  .panel { display: none; }
+  .panel.active { display: block; }
+  .columns { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  .col h2 { font-size: 14px; margin: 0 0 6px; color: #57606a; }
+  textarea {
+    width: 100%; height: 200px;
+    font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 12px;
+    padding: 10px; border: 1px solid var(--border); border-radius: 6px; resize: vertical;
+  }
+  .options { display: flex; flex-wrap: wrap; gap: 16px; align-items: center; margin: 12px 0; font-size: 13px; color: #57606a; }
+  .options label { display: flex; align-items: center; gap: 6px; cursor: pointer; }
+  select, input[type="text"] {
+    padding: 6px 9px; border: 1px solid var(--border); border-radius: 6px; font-size: 13px;
+  }
+  button {
+    padding: 8px 16px; border-radius: 6px; border: 1px solid var(--border);
+    background: #2da44e; color: white; font-size: 14px; cursor: pointer;
+  }
+  button.secondary { background: white; color: #1f2328; }
+  button:hover { filter: brightness(0.95); }
+  .controls { display: flex; gap: 10px; margin: 12px 0; }
+  .error { color: #c92a2a; font-size: 13px; margin-top: 8px; }
+  table { width: 100%; border-collapse: collapse; font-size: 12px; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; background: white; }
+  th, td { padding: 6px 10px; text-align: left; border-bottom: 1px solid var(--border); }
+  th { background: #f6f8fa; color: #57606a; }
+  .table-wrap { max-height: 280px; overflow: auto; border: 1px solid var(--border); border-radius: 6px; margin-top: 12px; }
+  .field-list { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 10px; }
+  .field-list label { display: flex; align-items: center; gap: 4px; font-size: 12px; background: white; border: 1px solid var(--border); padding: 4px 8px; border-radius: 6px; cursor: pointer; }
+  .empty-state { padding: 20px; text-align: center; color: #57606a; font-size: 13px; }
+</style>
+</head>
+<body>
+  <h1>CSV ↔ JSON Converter</h1>
+
+  <div class="tabs">
+    <button class="tab-btn active" data-tab="csv2json">CSV → JSON</button>
+    <button class="tab-btn" data-tab="json2csv">JSON → CSV</button>
+  </div>
+
+  <!-- CSV -> JSON -->
+  <div class="panel active" id="panel-csv2json">
+    <div class="options">
+      <label>Delimiter:
+        <select id="delimiter">
+          <option value=",">comma (,)</option>
+          <option value=";">semicolon (;)</option>
+          <option value="\t">tab</option>
+        </select>
+      </label>
+      <label><input type="checkbox" id="firstRowHeaders" checked /> First row is headers</label>
+      <label><input type="checkbox" id="detectTypes" checked /> Detect data types</label>
+    </div>
+    <div class="columns">
+      <div class="col">
+        <h2>CSV input</h2>
+        <textarea id="csvInput" placeholder="id,name,active&#10;1,John,true&#10;2,Jane,false"></textarea>
+      </div>
+      <div class="col">
+        <h2>Preview / JSON output</h2>
+        <textarea id="csvOutput" readonly placeholder="Result appears here"></textarea>
+      </div>
+    </div>
+    <div class="controls">
+      <button id="csvConvertBtn">Convert →</button>
+      <button id="csvDownloadBtn" class="secondary">Download JSON</button>
+    </div>
+    <div class="error" id="csvError"></div>
+    <div id="csvPreview"></div>
+  </div>
+
+  <!-- JSON -> CSV -->
+  <div class="panel" id="panel-json2csv">
+    <div class="options">
+      <label><input type="checkbox" id="flattenNested" /> Flatten nested objects (dot notation)</label>
+    </div>
+    <div class="columns">
+      <div class="col">
+        <h2>JSON input</h2>
+        <textarea id="jsonInput" placeholder='[{"id":1,"name":"John","active":true},{"id":2,"name":"Jane","active":false}]'></textarea>
+      </div>
+      <div class="col">
+        <h2>Preview / CSV output</h2>
+        <textarea id="jsonOutput" readonly placeholder="Result appears here"></textarea>
+      </div>
+    </div>
+    <div id="fieldSelector"></div>
+    <div class="controls">
+      <button id="jsonConvertBtn">Convert →</button>
+      <button id="jsonDownloadBtn" class="secondary">Download CSV</button>
+    </div>
+    <div class="error" id="jsonError"></div>
+    <div id="jsonPreview"></div>
+  </div>
+
+<script>
+  // ---------- Tabs ----------
+  document.querySelectorAll('.tab-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+      document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
+      btn.classList.add('active');
+      document.getElementById(`panel-${btn.dataset.tab}`).classList.add('active');
+    });
+  });
+
+  function escapeHtml(str) {
+    return String(str).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  }
+
+  function download(filename, content, mime) {
+    const blob = new Blob([content], { type: mime });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  }
+
+  // ---------- CSV parsing (handles quoted fields, escaped quotes, embedded delimiters/newlines) ----------
+  function parseCsv(text, delimiter) {
+    const rows = [];
+    let row = [];
+    let field = '';
+    let inQuotes = false;
+    for (let i = 0; i < text.length; i++) {
+      const c = text[i];
+      if (inQuotes) {
+        if (c === '"') {
+          if (text[i + 1] === '"') { field += '"'; i++; }
+          else inQuotes = false;
+        } else field += c;
+      } else {
+        if (c === '"') inQuotes = true;
+        else if (c === delimiter) { row.push(field); field = ''; }
+        else if (c === '\n') { row.push(field); rows.push(row); row = []; field = ''; }
+        else if (c === '\r') { /* skip, \n will terminate */ }
+        else field += c;
+      }
+    }
+    if (field !== '' || row.length > 0) { row.push(field); rows.push(row); }
+    return rows.filter(r => !(r.length === 1 && r[0] === ''));
+  }
+
+  function detectType(value) {
+    const trimmed = value.trim();
+    if (trimmed === '') return '';
+    if (/^(true|false)$/i.test(trimmed)) return trimmed.toLowerCase() === 'true';
+    if (/^-?\d+$/.test(trimmed)) return parseInt(trimmed, 10);
+    if (/^-?\d*\.\d+$/.test(trimmed)) return parseFloat(trimmed);
+    if (/^\d{4}-\d{2}-\d{2}(T\d{2}:\d{2}(:\d{2})?(\.\d+)?(Z|[+-]\d{2}:?\d{2})?)?$/.test(trimmed)) {
+      const d = new Date(trimmed);
+      if (!isNaN(d.getTime())) return trimmed; // keep as ISO string, just recognized as a date
+    }
+    return trimmed;
+  }
+
+  function csvToJson(text, delimiter, firstRowHeaders, detectTypes) {
+    const rows = parseCsv(text, delimiter);
+    if (rows.length === 0) return [];
+    let headers, dataRows;
+    if (firstRowHeaders) {
+      headers = rows[0];
+      dataRows = rows.slice(1);
+    } else {
+      headers = rows[0].map((_, i) => `column${i + 1}`);
+      dataRows = rows;
+    }
+    return dataRows.map(row => {
+      const obj = {};
+      headers.forEach((h, i) => {
+        const raw = row[i] !== undefined ? row[i] : '';
+        obj[h] = detectTypes ? detectType(raw) : raw;
+      });
+      return obj;
+    });
+  }
+
+  function renderTablePreview(container, headers, rows, limit = 20) {
+    if (rows.length === 0) {
+      container.innerHTML = '<div class="empty-state">No rows to preview.</div>';
+      return;
+    }
+    const shown = rows.slice(0, limit);
+    container.innerHTML = `
+      <div class="table-wrap"><table>
+        <thead><tr>${headers.map(h => `<th>${escapeHtml(h)}</th>`).join('')}</tr></thead>
+        <tbody>${shown.map(r => `<tr>${headers.map(h => `<td>${escapeHtml(r[h] !== undefined ? r[h] : '')}</td>`).join('')}</tr>`).join('')}</tbody>
+      </table></div>
+      <p style="font-size:12px;color:#57606a;margin-top:6px;">Showing ${shown.length} of ${rows.length} row(s)</p>`;
+  }
+
+  let lastJsonResult = null;
+
+  document.getElementById('csvConvertBtn').addEventListener('click', () => {
+    const errorEl = document.getElementById('csvError');
+    errorEl.textContent = '';
+    const text = document.getElementById('csvInput').value;
+    const delimiter = document.getElementById('delimiter').value === '\\t' ? '\t' : document.getElementById('delimiter').value;
+    const firstRowHeaders = document.getElementById('firstRowHeaders').checked;
+    const detectTypes = document.getElementById('detectTypes').checked;
+
+    if (!text.trim()) {
+      errorEl.textContent = 'Please provide CSV data.';
+      return;
+    }
+    try {
+      const result = csvToJson(text, delimiter, firstRowHeaders, detectTypes);
+      lastJsonResult = result;
+      const json = JSON.stringify(result, null, 2);
+      document.getElementById('csvOutput').value = json;
+      const headers = result.length > 0 ? Object.keys(result[0]) : [];
+      renderTablePreview(document.getElementById('csvPreview'), headers, result);
+    } catch (e) {
+      errorEl.textContent = `Failed to convert: ${e.message}`;
+      lastJsonResult = null;
+    }
+  });
+
+  document.getElementById('csvDownloadBtn').addEventListener('click', () => {
+    if (!lastJsonResult) return;
+    download('converted.json', JSON.stringify(lastJsonResult, null, 2), 'application/json');
+  });
+
+  // ---------- JSON -> CSV ----------
+  function flatten(obj, prefix = '', out = {}) {
+    for (const [key, value] of Object.entries(obj)) {
+      const path = prefix ? `${prefix}.${key}` : key;
+      if (value !== null && typeof value === 'object' && !Array.isArray(value)) {
+        flatten(value, path, out);
+      } else {
+        out[path] = Array.isArray(value) ? JSON.stringify(value) : value;
+      }
+    }
+    return out;
+  }
+
+  function csvEscape(value) {
+    if (value === null || value === undefined) return '';
+    const str = typeof value === 'object' ? JSON.stringify(value) : String(value);
+    if (/[",\n]/.test(str)) return `"${str.replace(/"/g, '""')}"`;
+    return str;
+  }
+
+  let parsedJsonRows = null;
+  let allFields = [];
+
+  document.getElementById('jsonConvertBtn').addEventListener('click', () => {
+    const errorEl = document.getElementById('jsonError');
+    errorEl.textContent = '';
+    const text = document.getElementById('jsonInput').value;
+    const flattenNested = document.getElementById('flattenNested').checked;
+
+    if (!text.trim()) {
+      errorEl.textContent = 'Please provide JSON data.';
+      return;
+    }
+    let data;
+    try {
+      data = JSON.parse(text);
+    } catch (e) {
+      errorEl.textContent = `Invalid JSON: ${e.message}`;
+      return;
+    }
+    if (!Array.isArray(data)) data = [data];
+    if (!data.every(item => item !== null && typeof item === 'object')) {
+      errorEl.textContent = 'JSON must be an array of objects (or a single object).';
+      return;
+    }
+
+    parsedJsonRows = data.map(item => flattenNested ? flatten(item) : item);
+    allFields = [...new Set(parsedJsonRows.flatMap(r => Object.keys(r)))];
+    renderFieldSelector(allFields);
+    renderJsonToCsv();
+  });
+
+  function renderFieldSelector(fields) {
+    const container = document.getElementById('fieldSelector');
+    if (fields.length === 0) { container.innerHTML = ''; return; }
+    container.innerHTML = `
+      <p style="font-size:12px; color:#57606a; margin: 10px 0 4px;">Select fields to include (order = column order):</p>
+      <div class="field-list">${fields.map(f => `
+        <label><input type="checkbox" class="field-check" value="${escapeHtml(f)}" checked /> ${escapeHtml(f)}</label>
+      `).join('')}</div>`;
+    container.querySelectorAll('.field-check').forEach(cb => cb.addEventListener('change', renderJsonToCsv));
+  }
+
+  function selectedFields() {
+    return Array.from(document.querySelectorAll('.field-check:checked')).map(cb => cb.value);
+  }
+
+  let lastCsvResult = '';
+
+  function renderJsonToCsv() {
+    if (!parsedJsonRows) return;
+    const fields = selectedFields().length > 0 ? selectedFields() : allFields;
+    const lines = [fields.map(csvEscape).join(',')];
+    parsedJsonRows.forEach(row => {
+      lines.push(fields.map(f => csvEscape(row[f])).join(','));
+    });
+    lastCsvResult = lines.join('\n');
+    document.getElementById('jsonOutput').value = lastCsvResult;
+    renderCsvTablePreview(fields);
+  }
+
+  function renderCsvTablePreview(fields) {
+    const container = document.getElementById('jsonPreview');
+    const limit = 20;
+    const shown = parsedJsonRows.slice(0, limit);
+    if (shown.length === 0) {
+      container.innerHTML = '<div class="empty-state">No rows to preview.</div>';
+      return;
+    }
+    container.innerHTML = `
+      <div class="table-wrap"><table>
+        <thead><tr>${fields.map(f => `<th>${escapeHtml(f)}</th>`).join('')}</tr></thead>
+        <tbody>${shown.map(r => `<tr>${fields.map(f => `<td>${escapeHtml(r[f] !== undefined ? (typeof r[f] === 'object' ? JSON.stringify(r[f]) : r[f]) : '')}</td>`).join('')}</tr>`).join('')}</tbody>
+      </table></div>
+      <p style="font-size:12px;color:#57606a;margin-top:6px;">Showing ${shown.length} of ${parsedJsonRows.length} row(s)</p>`;
+  }
+
+  document.getElementById('jsonDownloadBtn').addEventListener('click', () => {
+    if (!lastCsvResult) return;
+    download('converted.csv', lastCsvResult, 'text/csv;charset=utf-8;');
+  });
+</script>
+</body>
+</html>
