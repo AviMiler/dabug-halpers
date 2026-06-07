@@ -1,0 +1,304 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>JSON Diff Viewer</title>
+<style>
+  :root {
+    --added: #1a7f37;
+    --added-bg: #d3f9d8;
+    --removed: #c92a2a;
+    --removed-bg: #ffe3e3;
+    --modified: #966400;
+    --modified-bg: #fff3bf;
+    --border: #d0d7de;
+    --bg: #f6f8fa;
+  }
+  * { box-sizing: border-box; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    margin: 0;
+    padding: 20px;
+    background: var(--bg);
+    color: #1f2328;
+  }
+  h1 { font-size: 22px; margin: 0 0 16px; }
+  .panes {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 16px;
+  }
+  .pane h2 { font-size: 14px; margin: 0 0 6px; color: #57606a; }
+  textarea {
+    width: 100%;
+    height: 220px;
+    font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+    font-size: 13px;
+    padding: 10px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    resize: vertical;
+  }
+  .controls {
+    margin: 14px 0;
+    display: flex;
+    gap: 10px;
+    align-items: center;
+  }
+  button {
+    padding: 8px 16px;
+    border-radius: 6px;
+    border: 1px solid var(--border);
+    background: #2da44e;
+    color: white;
+    font-size: 14px;
+    cursor: pointer;
+  }
+  button.secondary {
+    background: white;
+    color: #1f2328;
+  }
+  button:hover { filter: brightness(0.95); }
+  .error {
+    color: var(--removed);
+    font-size: 13px;
+    margin-top: 6px;
+  }
+  .summary {
+    display: flex;
+    gap: 16px;
+    margin: 16px 0;
+    font-size: 14px;
+  }
+  .summary span { padding: 6px 12px; border-radius: 6px; background: white; border: 1px solid var(--border); }
+  .badge-added { color: var(--added); }
+  .badge-removed { color: var(--removed); }
+  .badge-modified { color: var(--modified); }
+  #results {
+    background: white;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    overflow: hidden;
+  }
+  .diff-row {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    padding: 8px 12px;
+    border-bottom: 1px solid var(--border);
+    font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+    font-size: 13px;
+  }
+  .diff-row:last-child { border-bottom: none; }
+  .diff-row.added { background: var(--added-bg); }
+  .diff-row.removed { background: var(--removed-bg); }
+  .diff-row.modified { background: var(--modified-bg); }
+  .diff-tag {
+    flex: 0 0 90px;
+    font-weight: 600;
+    text-transform: uppercase;
+    font-size: 11px;
+  }
+  .diff-tag.added { color: var(--added); }
+  .diff-tag.removed { color: var(--removed); }
+  .diff-tag.modified { color: var(--modified); }
+  .diff-path { flex: 1; word-break: break-all; }
+  .diff-values { color: #57606a; }
+  .diff-values .from { color: var(--removed); text-decoration: line-through; }
+  .diff-values .to { color: var(--added); }
+  .empty-state { padding: 24px; text-align: center; color: #57606a; }
+</style>
+</head>
+<body>
+  <h1>JSON Diff Viewer</h1>
+  <div class="panes">
+    <div class="pane">
+      <h2>Left JSON (expected)</h2>
+      <textarea id="leftInput" placeholder='{"name": "John", "active": true}'></textarea>
+      <div class="error" id="leftError"></div>
+    </div>
+    <div class="pane">
+      <h2>Right JSON (actual)</h2>
+      <textarea id="rightInput" placeholder='{"name": "Jane", "active": false}'></textarea>
+      <div class="error" id="rightError"></div>
+    </div>
+  </div>
+
+  <div class="controls">
+    <button id="compareBtn">Compare</button>
+    <button id="copyBtn" class="secondary">Copy differences</button>
+    <button id="clearBtn" class="secondary">Clear</button>
+  </div>
+
+  <div class="summary" id="summary" style="display:none;">
+    <span class="badge-added">+ <span id="addedCount">0</span> added</span>
+    <span class="badge-removed">- <span id="removedCount">0</span> removed</span>
+    <span class="badge-modified">~ <span id="modifiedCount">0</span> modified</span>
+  </div>
+
+  <div id="results"><div class="empty-state">Paste JSON on both sides and click Compare.</div></div>
+
+<script>
+  const leftInput = document.getElementById('leftInput');
+  const rightInput = document.getElementById('rightInput');
+  const leftError = document.getElementById('leftError');
+  const rightError = document.getElementById('rightError');
+  const results = document.getElementById('results');
+  const summary = document.getElementById('summary');
+  const addedCountEl = document.getElementById('addedCount');
+  const removedCountEl = document.getElementById('removedCount');
+  const modifiedCountEl = document.getElementById('modifiedCount');
+
+  let lastDiffs = [];
+
+  function isObject(val) {
+    return val !== null && typeof val === 'object' && !Array.isArray(val);
+  }
+
+  function formatValue(val) {
+    if (val === undefined) return 'undefined';
+    if (typeof val === 'string') return JSON.stringify(val);
+    if (isObject(val) || Array.isArray(val)) return JSON.stringify(val);
+    return String(val);
+  }
+
+  // Walk both trees and collect diffs as { type: 'added'|'removed'|'modified', path, from, to }
+  function diff(left, right, path, out) {
+    if (isObject(left) && isObject(right)) {
+      const keys = new Set([...Object.keys(left), ...Object.keys(right)]);
+      for (const key of keys) {
+        const childPath = path ? `${path}.${key}` : key;
+        const inLeft = Object.prototype.hasOwnProperty.call(left, key);
+        const inRight = Object.prototype.hasOwnProperty.call(right, key);
+        if (inLeft && !inRight) {
+          out.push({ type: 'removed', path: childPath, from: left[key], to: undefined });
+        } else if (!inLeft && inRight) {
+          out.push({ type: 'added', path: childPath, from: undefined, to: right[key] });
+        } else {
+          diff(left[key], right[key], childPath, out);
+        }
+      }
+      return;
+    }
+
+    if (Array.isArray(left) && Array.isArray(right)) {
+      const maxLen = Math.max(left.length, right.length);
+      for (let i = 0; i < maxLen; i++) {
+        const childPath = `${path}[${i}]`;
+        if (i >= left.length) {
+          out.push({ type: 'added', path: childPath, from: undefined, to: right[i] });
+        } else if (i >= right.length) {
+          out.push({ type: 'removed', path: childPath, from: left[i], to: undefined });
+        } else {
+          diff(left[i], right[i], childPath, out);
+        }
+      }
+      if (left.length !== right.length) {
+        out.push({ type: 'modified', path: `${path}.length`, from: left.length, to: right.length });
+      }
+      return;
+    }
+
+    // primitives, or type mismatch (object vs array vs primitive)
+    const same = JSON.stringify(left) === JSON.stringify(right);
+    if (!same) {
+      out.push({ type: 'modified', path: path || '(root)', from: left, to: right });
+    }
+  }
+
+  function render(diffs) {
+    lastDiffs = diffs;
+    if (diffs.length === 0) {
+      summary.style.display = 'none';
+      results.innerHTML = '<div class="empty-state">No differences found — the JSON structures are equal.</div>';
+      return;
+    }
+
+    const counts = { added: 0, removed: 0, modified: 0 };
+    diffs.forEach(d => counts[d.type]++);
+    addedCountEl.textContent = counts.added;
+    removedCountEl.textContent = counts.removed;
+    modifiedCountEl.textContent = counts.modified;
+    summary.style.display = 'flex';
+
+    results.innerHTML = diffs.map(d => {
+      let valuesHtml;
+      if (d.type === 'added') {
+        valuesHtml = `<span class="to">${escapeHtml(formatValue(d.to))}</span>`;
+      } else if (d.type === 'removed') {
+        valuesHtml = `<span class="from">${escapeHtml(formatValue(d.from))}</span>`;
+      } else {
+        valuesHtml = `<span class="from">${escapeHtml(formatValue(d.from))}</span> → <span class="to">${escapeHtml(formatValue(d.to))}</span>`;
+      }
+      return `<div class="diff-row ${d.type}">
+        <span class="diff-tag ${d.type}">${d.type}</span>
+        <span class="diff-path">${escapeHtml(d.path)}</span>
+        <span class="diff-values">${valuesHtml}</span>
+      </div>`;
+    }).join('');
+  }
+
+  function escapeHtml(str) {
+    return str.replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  }
+
+  function parseJson(text, errorEl) {
+    errorEl.textContent = '';
+    if (!text.trim()) {
+      errorEl.textContent = 'Please provide JSON.';
+      return null;
+    }
+    try {
+      return JSON.parse(text);
+    } catch (e) {
+      errorEl.textContent = `Invalid JSON: ${e.message}`;
+      return null;
+    }
+  }
+
+  document.getElementById('compareBtn').addEventListener('click', () => {
+    const left = parseJson(leftInput.value, leftError);
+    const right = parseJson(rightInput.value, rightError);
+    if (left === null || right === null) {
+      summary.style.display = 'none';
+      results.innerHTML = '<div class="empty-state">Fix the JSON errors above and try again.</div>';
+      return;
+    }
+    const diffs = [];
+    diff(left, right, '', diffs);
+    render(diffs);
+  });
+
+  document.getElementById('clearBtn').addEventListener('click', () => {
+    leftInput.value = '';
+    rightInput.value = '';
+    leftError.textContent = '';
+    rightError.textContent = '';
+    summary.style.display = 'none';
+    lastDiffs = [];
+    results.innerHTML = '<div class="empty-state">Paste JSON on both sides and click Compare.</div>';
+  });
+
+  document.getElementById('copyBtn').addEventListener('click', async () => {
+    if (lastDiffs.length === 0) return;
+    const text = lastDiffs.map(d => {
+      if (d.type === 'added') return `+ ${d.path}: ${formatValue(d.to)}`;
+      if (d.type === 'removed') return `- ${d.path}: ${formatValue(d.from)}`;
+      return `~ ${d.path}: ${formatValue(d.from)} → ${formatValue(d.to)}`;
+    }).join('\n');
+    try {
+      await navigator.clipboard.writeText(text);
+    } catch (e) {
+      // Fallback for environments without clipboard API access
+      const ta = document.createElement('textarea');
+      ta.value = text;
+      document.body.appendChild(ta);
+      ta.select();
+      document.execCommand('copy');
+      document.body.removeChild(ta);
+    }
+  });
+</script>
+</body>
+</html>
