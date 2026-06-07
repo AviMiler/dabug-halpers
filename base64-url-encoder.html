@@ -1,0 +1,165 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Base64 / URL / Hex Encoder</title>
+<style>
+  :root { --border: #d0d7de; --bg: #f6f8fa; }
+  * { box-sizing: border-box; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    margin: 0; padding: 20px; background: var(--bg); color: #1f2328;
+  }
+  h1 { font-size: 22px; margin: 0 0 16px; }
+  .controls { display: flex; gap: 12px; align-items: center; margin-bottom: 14px; }
+  select, button {
+    padding: 8px 14px; border-radius: 6px; border: 1px solid var(--border);
+    font-size: 14px;
+  }
+  button { background: #2da44e; color: white; cursor: pointer; }
+  button.secondary { background: white; color: #1f2328; }
+  button:hover { filter: brightness(0.95); }
+  .columns { display: grid; grid-template-columns: 1fr auto 1fr; gap: 12px; align-items: stretch; }
+  .col h2 { font-size: 14px; margin: 0 0 6px; color: #57606a; }
+  textarea {
+    width: 100%; height: 220px;
+    font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 13px;
+    padding: 10px; border: 1px solid var(--border); border-radius: 6px; resize: vertical;
+  }
+  .swap-col { display: flex; align-items: center; justify-content: center; }
+  .swap-btn { font-size: 18px; padding: 10px 12px; border-radius: 50%; }
+  .error { color: #c92a2a; font-size: 13px; margin-top: 6px; }
+  .batch-row { margin-top: 12px; font-size: 13px; color: #57606a; display: flex; align-items: center; gap: 6px; }
+</style>
+</head>
+<body>
+  <h1>Base64 / URL / Hex Encoder</h1>
+
+  <div class="controls">
+    <label for="format" style="font-size:13px;color:#57606a;">Format:</label>
+    <select id="format">
+      <option value="base64">Base64</option>
+      <option value="url">URL encoding</option>
+      <option value="hex">Hex</option>
+    </select>
+    <button id="encodeBtn">Encode →</button>
+    <button id="decodeBtn" class="secondary">← Decode</button>
+    <button id="clearBtn" class="secondary">Clear</button>
+    <button id="copyBtn" class="secondary">Copy output</button>
+  </div>
+  <div class="batch-row">
+    <input type="checkbox" id="batchMode" />
+    <label for="batchMode">Batch mode (process each line independently)</label>
+  </div>
+
+  <div class="columns" style="margin-top: 14px;">
+    <div class="col">
+      <h2>Input</h2>
+      <textarea id="input" placeholder="Hello World"></textarea>
+    </div>
+    <div class="swap-col">
+      <button id="swapBtn" class="secondary swap-btn" title="Swap input/output">⇄</button>
+    </div>
+    <div class="col">
+      <h2>Output</h2>
+      <textarea id="output" readonly placeholder="Result appears here"></textarea>
+    </div>
+  </div>
+  <div class="error" id="error"></div>
+
+<script>
+  const input = document.getElementById('input');
+  const output = document.getElementById('output');
+  const format = document.getElementById('format');
+  const errorEl = document.getElementById('error');
+  const batchMode = document.getElementById('batchMode');
+
+  function utf8ToBase64(str) {
+    const bytes = new TextEncoder().encode(str);
+    let binary = '';
+    bytes.forEach(b => binary += String.fromCharCode(b));
+    return btoa(binary);
+  }
+
+  function base64ToUtf8(b64) {
+    const binary = atob(b64);
+    const bytes = Uint8Array.from(binary, c => c.charCodeAt(0));
+    return new TextDecoder('utf-8', { fatal: true }).decode(bytes);
+  }
+
+  function strToHex(str) {
+    const bytes = new TextEncoder().encode(str);
+    return Array.from(bytes).map(b => b.toString(16).padStart(2, '0')).join('');
+  }
+
+  function hexToStr(hex) {
+    const cleaned = hex.replace(/\s+/g, '');
+    if (!/^[0-9a-fA-F]*$/.test(cleaned) || cleaned.length % 2 !== 0) {
+      throw new Error('Hex string must contain an even number of hex digits.');
+    }
+    const bytes = new Uint8Array(cleaned.length / 2);
+    for (let i = 0; i < cleaned.length; i += 2) {
+      bytes[i / 2] = parseInt(cleaned.substr(i, 2), 16);
+    }
+    return new TextDecoder('utf-8', { fatal: true }).decode(bytes);
+  }
+
+  const encoders = {
+    base64: { encode: utf8ToBase64, decode: base64ToUtf8 },
+    url: { encode: encodeURIComponent, decode: decodeURIComponent },
+    hex: { encode: strToHex, decode: hexToStr },
+  };
+
+  function process(mode) {
+    errorEl.textContent = '';
+    const fmt = format.value;
+    const { encode, decode } = encoders[fmt];
+    const fn = mode === 'encode' ? encode : decode;
+    const text = input.value;
+
+    try {
+      if (batchMode.checked) {
+        const lines = text.split('\n');
+        output.value = lines.map(line => line === '' ? '' : fn(line)).join('\n');
+      } else {
+        output.value = fn(text);
+      }
+    } catch (e) {
+      errorEl.textContent = `Failed to ${mode}: ${e.message}`;
+      output.value = '';
+    }
+  }
+
+  document.getElementById('encodeBtn').addEventListener('click', () => process('encode'));
+  document.getElementById('decodeBtn').addEventListener('click', () => process('decode'));
+
+  document.getElementById('clearBtn').addEventListener('click', () => {
+    input.value = '';
+    output.value = '';
+    errorEl.textContent = '';
+  });
+
+  document.getElementById('swapBtn').addEventListener('click', () => {
+    const tmp = input.value;
+    input.value = output.value;
+    output.value = tmp;
+    errorEl.textContent = '';
+  });
+
+  document.getElementById('copyBtn').addEventListener('click', async () => {
+    if (!output.value) return;
+    try {
+      await navigator.clipboard.writeText(output.value);
+    } catch (e) {
+      const ta = document.createElement('textarea');
+      ta.value = output.value;
+      document.body.appendChild(ta);
+      ta.select();
+      document.execCommand('copy');
+      document.body.removeChild(ta);
+    }
+  });
+</script>
+</body>
+</html>
