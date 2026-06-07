@@ -1,0 +1,286 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Regex Tester</title>
+<style>
+  :root {
+    --border: #d0d7de;
+    --bg: #f6f8fa;
+    --match-bg: #fff3bf;
+    --match-border: #f08c00;
+    --group-colors: #d0ebff, #d3f9d8, #ffe3e3, #e5dbff, #ffec99, #c5f6fa;
+  }
+  * { box-sizing: border-box; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    margin: 0;
+    padding: 20px;
+    background: var(--bg);
+    color: #1f2328;
+  }
+  h1 { font-size: 22px; margin: 0 0 16px; }
+  .pattern-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    background: white;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 10px 12px;
+    font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+    font-size: 15px;
+  }
+  .pattern-row .slash { color: #57606a; }
+  #pattern {
+    flex: 1;
+    border: none;
+    outline: none;
+    font: inherit;
+    padding: 4px;
+  }
+  .flags { display: flex; gap: 12px; align-items: center; font-size: 13px; font-family: -apple-system, sans-serif; color: #57606a; }
+  .flags label { display: flex; align-items: center; gap: 4px; cursor: pointer; }
+  .error {
+    color: #c92a2a;
+    font-size: 13px;
+    margin-top: 8px;
+  }
+  .columns {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 16px;
+    margin-top: 16px;
+  }
+  .col h2 { font-size: 14px; margin: 0 0 6px; color: #57606a; }
+  textarea {
+    width: 100%;
+    height: 200px;
+    font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+    font-size: 13px;
+    padding: 10px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    resize: vertical;
+  }
+  #highlighted {
+    width: 100%;
+    min-height: 200px;
+    font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+    font-size: 13px;
+    padding: 10px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: white;
+    white-space: pre-wrap;
+    word-break: break-word;
+    overflow-y: auto;
+    max-height: 320px;
+  }
+  mark {
+    background: var(--match-bg);
+    border: 1px solid var(--match-border);
+    border-radius: 3px;
+    padding: 0 1px;
+  }
+  .summary {
+    margin-top: 16px;
+    font-size: 14px;
+    color: #57606a;
+  }
+  .summary strong { color: #1f2328; }
+  #matches {
+    margin-top: 12px;
+    background: white;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    overflow: hidden;
+  }
+  .match-item {
+    padding: 10px 14px;
+    border-bottom: 1px solid var(--border);
+    font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+    font-size: 13px;
+  }
+  .match-item:last-child { border-bottom: none; }
+  .match-title { font-weight: 600; margin-bottom: 4px; }
+  .match-title .full { background: var(--match-bg); border: 1px solid var(--match-border); border-radius: 3px; padding: 0 3px; }
+  .group-list { margin-left: 16px; color: #57606a; }
+  .group-list div { margin: 2px 0; }
+  .group-swatch {
+    display: inline-block;
+    width: 10px;
+    height: 10px;
+    border-radius: 2px;
+    margin-right: 6px;
+    vertical-align: middle;
+  }
+  .empty-state { padding: 20px; text-align: center; color: #57606a; font-size: 14px; }
+</style>
+</head>
+<body>
+  <h1>Regex Tester</h1>
+
+  <div class="pattern-row">
+    <span class="slash">/</span>
+    <input type="text" id="pattern" placeholder="(\d{3})-(\d{3})-(\d{4})" />
+    <span class="slash">/</span>
+    <div class="flags">
+      <label><input type="checkbox" id="flag-g" checked> g (global)</label>
+      <label><input type="checkbox" id="flag-i"> i (ignore case)</label>
+      <label><input type="checkbox" id="flag-m"> m (multiline)</label>
+      <label><input type="checkbox" id="flag-s"> s (dotAll)</label>
+    </div>
+  </div>
+  <div class="error" id="patternError"></div>
+
+  <div class="columns">
+    <div class="col">
+      <h2>Test string</h2>
+      <textarea id="testInput" placeholder="123-456-7890 and 111-222-3333"></textarea>
+    </div>
+    <div class="col">
+      <h2>Highlighted matches</h2>
+      <div id="highlighted"><div class="empty-state">Enter a pattern and test string to see matches highlighted here.</div></div>
+    </div>
+  </div>
+
+  <div class="summary" id="summary" style="display:none;">
+    <strong id="matchCount">0</strong> match(es) found
+  </div>
+
+  <div id="matches"></div>
+
+<script>
+  const patternInput = document.getElementById('pattern');
+  const testInput = document.getElementById('testInput');
+  const patternError = document.getElementById('patternError');
+  const highlighted = document.getElementById('highlighted');
+  const summary = document.getElementById('summary');
+  const matchCountEl = document.getElementById('matchCount');
+  const matchesEl = document.getElementById('matches');
+
+  const flagIds = ['flag-g', 'flag-i', 'flag-m', 'flag-s'];
+  const groupColors = ['#a5d8ff', '#b2f2bb', '#ffc9c9', '#d0bfff', '#ffe066', '#99e9f2'];
+
+  function escapeHtml(str) {
+    return str.replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  }
+
+  function currentFlags() {
+    return flagIds
+      .filter(id => document.getElementById(id).checked)
+      .map(id => id.replace('flag-', ''))
+      .join('');
+  }
+
+  function buildRegex() {
+    const pattern = patternInput.value;
+    if (!pattern) return { regex: null, error: null };
+    let flags = currentFlags();
+    // Force global so we can iterate all matches; remember if user wanted it.
+    if (!flags.includes('g')) flags += 'g';
+    try {
+      return { regex: new RegExp(pattern, flags), error: null };
+    } catch (e) {
+      return { regex: null, error: e.message };
+    }
+  }
+
+  function findMatches(regex, text) {
+    const matches = [];
+    let m;
+    let lastIndex = -1;
+    while ((m = regex.exec(text)) !== null) {
+      matches.push(m);
+      if (m.index === regex.lastIndex) regex.lastIndex++; // avoid infinite loop on zero-length matches
+      if (matches.length > 1000) break; // safety cap
+      if (regex.lastIndex === lastIndex) break;
+      lastIndex = regex.lastIndex;
+    }
+    return matches;
+  }
+
+  function renderHighlighted(text, matches) {
+    if (matches.length === 0) {
+      highlighted.innerHTML = `<div class="empty-state">No matches found.</div>`;
+      return;
+    }
+    let html = '';
+    let cursor = 0;
+    for (const m of matches) {
+      html += escapeHtml(text.slice(cursor, m.index));
+      html += `<mark>${escapeHtml(m[0])}</mark>`;
+      cursor = m.index + m[0].length;
+    }
+    html += escapeHtml(text.slice(cursor));
+    highlighted.innerHTML = html || '<div class="empty-state">No matches found.</div>';
+  }
+
+  function renderMatchList(matches) {
+    if (matches.length === 0) {
+      matchesEl.innerHTML = '';
+      return;
+    }
+    matchesEl.innerHTML = matches.map((m, idx) => {
+      const groups = m.slice(1);
+      let groupsHtml = '';
+      if (groups.length > 0) {
+        groupsHtml = '<div class="group-list">' + groups.map((g, gi) => {
+          const color = groupColors[gi % groupColors.length];
+          const value = g === undefined ? '<em>undefined</em>' : escapeHtml(g);
+          return `<div><span class="group-swatch" style="background:${color}"></span>Group ${gi + 1}: ${value}</div>`;
+        }).join('') + '</div>';
+      }
+      let namedHtml = '';
+      if (m.groups) {
+        const named = Object.entries(m.groups);
+        if (named.length > 0) {
+          namedHtml = '<div class="group-list">' + named.map(([name, value]) => {
+            const v = value === undefined ? '<em>undefined</em>' : escapeHtml(value);
+            return `<div>Named group "${escapeHtml(name)}": ${v}</div>`;
+          }).join('') + '</div>';
+        }
+      }
+      return `<div class="match-item">
+        <div class="match-title">Match ${idx + 1}: <span class="full">${escapeHtml(m[0])}</span> <span style="color:#57606a; font-weight: normal;">(index ${m.index})</span></div>
+        ${groupsHtml}
+        ${namedHtml}
+      </div>`;
+    }).join('');
+  }
+
+  function run() {
+    const text = testInput.value;
+    const { regex, error } = buildRegex();
+
+    if (error) {
+      patternError.textContent = `Invalid regex: ${error}`;
+    } else {
+      patternError.textContent = '';
+    }
+
+    if (!regex || !text) {
+      summary.style.display = 'none';
+      matchesEl.innerHTML = '';
+      highlighted.innerHTML = '<div class="empty-state">Enter a pattern and test string to see matches highlighted here.</div>';
+      return;
+    }
+
+    const matches = findMatches(regex, text);
+    renderHighlighted(text, matches);
+    renderMatchList(matches);
+
+    matchCountEl.textContent = matches.length;
+    summary.style.display = matches.length > 0 ? 'block' : 'block';
+  }
+
+  [patternInput, testInput, ...flagIds.map(id => document.getElementById(id))].forEach(el => {
+    el.addEventListener('input', run);
+  });
+
+  run();
+</script>
+</body>
+</html>
