@@ -1,0 +1,190 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Error Stack Parser</title>
+<style>
+  :root { --border: #d0d7de; --bg: #f6f8fa; }
+  * { box-sizing: border-box; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    margin: 0; padding: 20px; background: var(--bg); color: #1f2328;
+  }
+  h1 { font-size: 22px; margin: 0 0 16px; }
+  textarea {
+    width: 100%; height: 220px;
+    font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 12px;
+    padding: 10px; border: 1px solid var(--border); border-radius: 6px; resize: vertical;
+  }
+  .controls { margin: 12px 0; display: flex; gap: 10px; align-items: center; }
+  button {
+    padding: 8px 16px; border-radius: 6px; border: 1px solid var(--border);
+    background: #2da44e; color: white; font-size: 14px; cursor: pointer;
+  }
+  button.secondary { background: white; color: #1f2328; }
+  button:hover { filter: brightness(0.95); }
+  .result-card { background: white; border: 1px solid var(--border); border-radius: 6px; padding: 16px; margin-top: 14px; }
+  .header-row { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; flex-wrap: wrap; }
+  .badge { display: inline-block; padding: 3px 10px; border-radius: 12px; font-size: 12px; font-weight: 600; background: #c92a2a; color: white; }
+  .env-badge { background: #1971c2; }
+  .message { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 14px; color: #1f2328; }
+  ol.frames { list-style: none; margin: 12px 0 0; padding: 0; counter-reset: frame; }
+  ol.frames li {
+    counter-increment: frame;
+    padding: 8px 12px 8px 38px;
+    border-bottom: 1px solid var(--border);
+    font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+    font-size: 13px;
+    position: relative;
+  }
+  ol.frames li::before {
+    content: counter(frame);
+    position: absolute; left: 10px; top: 8px;
+    width: 20px; height: 20px; border-radius: 50%;
+    background: #f1f3f5; color: #57606a; font-size: 11px;
+    display: flex; align-items: center; justify-content: center;
+  }
+  ol.frames li:last-child { border-bottom: none; }
+  .frame-fn { font-weight: 600; }
+  .frame-loc { color: #1971c2; }
+  .frame-loc:hover { text-decoration: underline; cursor: pointer; }
+  .empty-state { padding: 24px; text-align: center; color: #57606a; }
+  .meta { font-size: 12px; color: #57606a; margin-top: 4px; }
+</style>
+</head>
+<body>
+  <h1>Error Stack Parser</h1>
+
+  <textarea id="stackInput" placeholder="TypeError: Cannot read property 'name' of undefined
+    at EmployeeListStore (employees.store.ts:45:12)
+    at FilterBar (filter-bar.component.ts:28:5)
+    at async ngOnInit (app.component.ts:15:18)"></textarea>
+
+  <div class="controls">
+    <button id="parseBtn">Parse stack trace</button>
+    <button id="clearBtn" class="secondary">Clear</button>
+  </div>
+
+  <div id="result"></div>
+
+<script>
+  function escapeHtml(str) {
+    return String(str).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  }
+
+  // Frame formats supported:
+  //  V8/Node:  "at functionName (file:line:col)"  |  "at file:line:col"  |  "at async functionName (...)"
+  //  Firefox:  "functionName@file:line:col"
+  //  .NET:     "at Namespace.Class.Method(args) in file:line N"
+  const FRAME_PATTERNS = [
+    {
+      // V8/Node "at fn (file:line:col)" or "at fn (file:line:col)" with optional "async"/"new"
+      re: /^\s*at\s+(?:(async|new)\s+)?(.+?)\s+\(([^()]+):(\d+):(\d+)\)\s*$/,
+      build: m => ({ functionName: m[2], file: m[3], line: +m[4], column: +m[5], modifier: m[1] || null }),
+    },
+    {
+      // V8/Node "at file:line:col" (no function name)
+      re: /^\s*at\s+([^\s(]+):(\d+):(\d+)\s*$/,
+      build: m => ({ functionName: '<anonymous>', file: m[1], line: +m[2], column: +m[3], modifier: null }),
+    },
+    {
+      // Firefox/Safari "functionName@file:line:col"
+      re: /^\s*([^@\s]*)@([^\s:]+):(\d+):(\d+)\s*$/,
+      build: m => ({ functionName: m[1] || '<anonymous>', file: m[2], line: +m[3], column: +m[4], modifier: null }),
+    },
+    {
+      // .NET "at Namespace.Class.Method(args) in file:line N"
+      re: /^\s*at\s+(.+?)\s+in\s+(.+):line\s+(\d+)\s*$/,
+      build: m => ({ functionName: m[1], file: m[2], line: +m[3], column: null, modifier: null }),
+    },
+  ];
+
+  function parseFrame(line) {
+    for (const { re, build } of FRAME_PATTERNS) {
+      const m = line.match(re);
+      if (m) return build(m);
+    }
+    return null;
+  }
+
+  function detectEnvironment(frames, headerLine) {
+    if (frames.some(f => f.file && /\.cs$/.test(f.file)) || /\bin\s+.+:line\s+\d+/.test(headerLine)) return '.NET';
+    if (frames.some(f => /@/.test(f.raw || ''))) return 'Firefox/Safari';
+    if (/\.component\.ts|\.store\.ts|@angular/.test(headerLine)) return 'Angular';
+    return 'Node.js / V8 (Chrome)';
+  }
+
+  function parseStack(text) {
+    const lines = text.split('\n').map(l => l.trimEnd()).filter(l => l.trim() !== '');
+    if (lines.length === 0) return null;
+
+    // First line(s) until the first parseable frame are treated as the error header.
+    const headerLines = [];
+    const frames = [];
+    for (const line of lines) {
+      const frame = parseFrame(line);
+      if (frame) {
+        frame.raw = line;
+        frames.push(frame);
+      } else if (frames.length === 0) {
+        headerLines.push(line.trim());
+      }
+    }
+
+    const header = headerLines.join(' ').trim();
+    const headerMatch = header.match(/^([A-Za-z_$][\w$.]*(?:Error|Exception))\s*:\s*(.*)$/);
+    const errorType = headerMatch ? headerMatch[1] : (header ? '(unknown)' : '(none)');
+    const message = headerMatch ? headerMatch[2] : header;
+
+    return {
+      errorType,
+      message,
+      frames,
+      environment: detectEnvironment(frames, header),
+      raw: text,
+    };
+  }
+
+  function render(parsed) {
+    const container = document.getElementById('result');
+    if (!parsed || (parsed.frames.length === 0 && !parsed.message)) {
+      container.innerHTML = '<div class="result-card"><div class="empty-state">Paste an error message and stack trace, then click "Parse stack trace".</div></div>';
+      return;
+    }
+
+    const framesHtml = parsed.frames.length > 0
+      ? `<ol class="frames">${parsed.frames.map(f => `
+          <li>
+            <span class="frame-fn">${escapeHtml(f.functionName)}</span>${f.modifier ? ` <em>(${escapeHtml(f.modifier)})</em>` : ''}
+            <br>
+            <span class="frame-loc" title="${escapeHtml(f.file)}">${escapeHtml(f.file)}${f.line != null ? `:${f.line}` : ''}${f.column != null ? `:${f.column}` : ''}</span>
+          </li>
+        `).join('')}</ol>`
+      : '<div class="empty-state">No stack frames could be parsed from the input.</div>';
+
+    container.innerHTML = `
+      <div class="result-card">
+        <div class="header-row">
+          <span class="badge">${escapeHtml(parsed.errorType)}</span>
+          <span class="badge env-badge">${escapeHtml(parsed.environment)}</span>
+        </div>
+        <div class="message">${escapeHtml(parsed.message || '(no message)')}</div>
+        <div class="meta">${parsed.frames.length} stack frame(s) parsed</div>
+        ${framesHtml}
+      </div>
+    `;
+  }
+
+  document.getElementById('parseBtn').addEventListener('click', () => {
+    const text = document.getElementById('stackInput').value;
+    render(parseStack(text));
+  });
+
+  document.getElementById('clearBtn').addEventListener('click', () => {
+    document.getElementById('stackInput').value = '';
+    document.getElementById('result').innerHTML = '';
+  });
+</script>
+</body>
+</html>
