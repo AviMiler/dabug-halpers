@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Debug Helpers</title>
+<style>
+  :root { --border: #d0d7de; --bg: #f6f8fa; }
+  * { box-sizing: border-box; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    margin: 0; padding: 32px; background: var(--bg); color: #1f2328;
+  }
+  h1 { font-size: 24px; margin: 0 0 6px; }
+  p.subtitle { color: #57606a; margin: 0 0 24px; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 14px; }
+  a.card {
+    display: block; background: white; border: 1px solid var(--border); border-radius: 8px;
+    padding: 16px 18px; text-decoration: none; color: inherit;
+  }
+  a.card:hover { border-color: #2da44e; box-shadow: 0 1px 4px rgba(0,0,0,0.06); }
+  a.card h2 { font-size: 15px; margin: 0 0 6px; color: #1f2328; }
+  a.card p { font-size: 13px; margin: 0; color: #57606a; }
+</style>
+</head>
+<body>
+  <h1>Debug Helpers</h1>
+  <p class="subtitle">Self-contained, single-file tools for debugging and data analysis. Just open the HTML file — no build step needed.</p>
+  <div class="grid">
+    <a class="card" href="json-diff-viewer.html">
+      <h2>JSON Diff Viewer</h2>
+      <p>Compare two JSON structures side-by-side with color-coded additions, removals, and modifications.</p>
+    </a>
+    <a class="card" href="regex-tester.html">
+      <h2>Regex Tester</h2>
+      <p>Live pattern matching with highlighted matches, capture groups, named groups, and flags.</p>
+    </a>
+    <a class="card" href="csv-json-converter.html">
+      <h2>CSV ↔ JSON Converter</h2>
+      <p>Convert between CSV and JSON with type detection, flattening, field selection, and previews.</p>
+    </a>
+    <a class="card" href="timestamp-converter.html">
+      <h2>Timestamp Converter</h2>
+      <p>Convert Unix timestamps to readable dates across timezones, with relative time and date diffs.</p>
+    </a>
+    <a class="card" href="base64-url-encoder.html">
+      <h2>Base64 / URL / Hex Encoder</h2>
+      <p>Encode and decode text as Base64, URL-encoded, or Hex, with batch mode and Unicode support.</p>
+    </a>
+    <a class="card" href="log-parser.html">
+      <h2>Log Parser</h2>
+      <p>Filter logs by level, search full-text, group by component, view stats, and export as CSV.</p>
+    </a>
+    <a class="card" href="error-stack-parser.html">
+      <h2>Error Stack Parser</h2>
+      <p>Parse error messages and stack traces (Node/V8, Firefox, .NET) into structured frame lists.</p>
+    </a>
+    <a class="card" href="correlation-id-tracker.html">
+      <h2>Correlation ID Tracker</h2>
+      <p>Find all log entries for a trace/correlation ID and view a chronological cross-service timeline.</p>
+    </a>
+  </div>
+</body>
+</html>
