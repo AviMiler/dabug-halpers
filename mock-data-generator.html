@@ -1,0 +1,259 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Mock Data Generator</title>
+<style>
+  :root { --border: #d0d7de; --bg: #f6f8fa; }
+  * { box-sizing: border-box; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    margin: 0; padding: 20px; background: var(--bg); color: #1f2328;
+  }
+  h1 { font-size: 22px; margin: 0 0 16px; }
+  .panel { background: white; border: 1px solid var(--border); border-radius: 6px; padding: 16px; margin-bottom: 16px; }
+  .field-row { display: flex; gap: 8px; align-items: center; margin-bottom: 8px; }
+  .field-row input[type="text"] {
+    flex: 1; padding: 7px 9px; border: 1px solid var(--border); border-radius: 6px; font-size: 13px;
+  }
+  .field-row select {
+    padding: 7px 9px; border: 1px solid var(--border); border-radius: 6px; font-size: 13px;
+  }
+  .field-row input.range {
+    width: 90px; padding: 7px 9px; border: 1px solid var(--border); border-radius: 6px; font-size: 13px;
+  }
+  button {
+    padding: 8px 16px; border-radius: 6px; border: 1px solid var(--border);
+    background: #2da44e; color: white; font-size: 14px; cursor: pointer;
+  }
+  button.secondary { background: white; color: #1f2326; color: #1f2328; }
+  button.danger { background: white; color: #c92a2a; border-color: #c92a2a; }
+  button:hover { filter: brightness(0.95); }
+  .controls { display: flex; gap: 10px; align-items: center; margin-top: 12px; }
+  .controls label { font-size: 13px; color: #57606a; display: flex; align-items: center; gap: 6px; }
+  input[type="number"] { width: 110px; padding: 7px 9px; border: 1px solid var(--border); border-radius: 6px; font-size: 13px; }
+  textarea#preview {
+    width: 100%; height: 280px;
+    font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 12px;
+    padding: 10px; border: 1px solid var(--border); border-radius: 6px; resize: vertical;
+  }
+  .meta { font-size: 12px; color: #57606a; margin-top: 6px; }
+  h2 { font-size: 14px; margin: 0 0 10px; color: #57606a; }
+</style>
+</head>
+<body>
+  <h1>Mock Data Generator</h1>
+
+  <div class="panel">
+    <h2>Schema</h2>
+    <div id="fields"></div>
+    <button id="addFieldBtn" class="secondary">+ Add field</button>
+  </div>
+
+  <div class="panel">
+    <h2>Generate</h2>
+    <div class="controls">
+      <label>Count: <input type="number" id="countInput" value="10" min="1" max="100000" /></label>
+      <button id="generateBtn">Generate</button>
+      <button id="downloadJsonBtn" class="secondary">Download JSON</button>
+      <button id="downloadCsvBtn" class="secondary">Download CSV</button>
+    </div>
+    <div class="meta" id="genMeta"></div>
+  </div>
+
+  <div class="panel">
+    <h2>Preview (first 50 rows)</h2>
+    <textarea id="preview" readonly placeholder="Click Generate to produce mock data"></textarea>
+  </div>
+
+<script>
+  const FIELD_TYPES = [
+    { value: 'uuid', label: 'UUID' },
+    { value: 'fullName', label: 'Full Name' },
+    { value: 'firstName', label: 'First Name' },
+    { value: 'lastName', label: 'Last Name' },
+    { value: 'email', label: 'Email' },
+    { value: 'phone', label: 'Phone' },
+    { value: 'address', label: 'Address' },
+    { value: 'city', label: 'City' },
+    { value: 'date', label: 'Date' },
+    { value: 'number', label: 'Number (range)' },
+    { value: 'boolean', label: 'Boolean' },
+    { value: 'sentence', label: 'Sentence' },
+    { value: 'sequence', label: 'Sequence (1,2,3...)' },
+  ];
+
+  const FIRST_NAMES = ['James','Mary','Robert','Patricia','John','Jennifer','Michael','Linda','David','Elizabeth','Daniel','Barbara','Noa','Yossi','Maya','Itay','Tamar','Dana','Omer','Shira'];
+  const LAST_NAMES = ['Smith','Johnson','Williams','Brown','Jones','Garcia','Miller','Davis','Cohen','Levi','Mizrahi','Peretz','Friedman','Katz','Avraham','Bar','Golan','Shapiro'];
+  const CITIES = ['Tel Aviv','Jerusalem','Haifa','New York','London','Berlin','Paris','Tokyo','Toronto','Sydney','Madrid','Rome'];
+  const STREETS = ['Main St','Oak Ave','Maple Dr','Herzl St','Dizengoff St','King George St','Park Lane','Sunset Blvd'];
+  const WORDS = ['system','database','request','response','error','timeout','cache','user','session','token','service','endpoint','query','payload','event','metric','queue','worker','config','module'];
+
+  let seedCounter = 1;
+
+  function rand(min, max) { return Math.random() * (max - min) + min; }
+  function randInt(min, max) { return Math.floor(rand(min, max + 1)); }
+  function pick(arr) { return arr[randInt(0, arr.length - 1)]; }
+
+  function uuid() {
+    return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => {
+      const r = Math.random() * 16 | 0;
+      const v = c === 'x' ? r : (r & 0x3 | 0x8);
+      return v.toString(16);
+    });
+  }
+
+  function randomDate(startYear = 2020, endYear = 2026) {
+    const start = new Date(startYear, 0, 1).getTime();
+    const end = new Date(endYear, 11, 31).getTime();
+    return new Date(rand(start, end)).toISOString().slice(0, 10);
+  }
+
+  function generateValue(field) {
+    switch (field.type) {
+      case 'uuid': return uuid();
+      case 'firstName': return pick(FIRST_NAMES);
+      case 'lastName': return pick(LAST_NAMES);
+      case 'fullName': return `${pick(FIRST_NAMES)} ${pick(LAST_NAMES)}`;
+      case 'email': {
+        const fn = pick(FIRST_NAMES).toLowerCase();
+        const ln = pick(LAST_NAMES).toLowerCase();
+        return `${fn}.${ln}${randInt(1, 999)}@example.com`;
+      }
+      case 'phone': return `+1-${randInt(200, 999)}-${randInt(200, 999)}-${randInt(1000, 9999)}`;
+      case 'address': return `${randInt(1, 9999)} ${pick(STREETS)}`;
+      case 'city': return pick(CITIES);
+      case 'date': return randomDate();
+      case 'number': {
+        const min = field.min != null ? field.min : 0;
+        const max = field.max != null ? field.max : 1000;
+        return randInt(min, max);
+      }
+      case 'boolean': return Math.random() < 0.5;
+      case 'sentence': return `The ${pick(WORDS)} ${pick(WORDS)} ${pick(['failed','succeeded','was updated','timed out','was created','was deleted'])}.`;
+      case 'sequence': return field._seq = (field._seq || 0) + 1;
+      default: return null;
+    }
+  }
+
+  function readSchema() {
+    return Array.from(document.querySelectorAll('.field-row')).map(row => ({
+      name: row.querySelector('.field-name').value.trim() || 'field',
+      type: row.querySelector('.field-type').value,
+      min: row.querySelector('.field-min') ? parseFloat(row.querySelector('.field-min').value) : null,
+      max: row.querySelector('.field-max') ? parseFloat(row.querySelector('.field-max').value) : null,
+      _seq: 0,
+    }));
+  }
+
+  function generate(schema, count) {
+    return Array.from({ length: count }, () => {
+      const obj = {};
+      schema.forEach(field => { obj[field.name] = generateValue(field); });
+      return obj;
+    });
+  }
+
+  function csvEscape(value) {
+    const str = typeof value === 'object' && value !== null ? JSON.stringify(value) : String(value);
+    if (/[",\n]/.test(str)) return `"${str.replace(/"/g, '""')}"`;
+    return str;
+  }
+
+  function toCsv(rows) {
+    if (rows.length === 0) return '';
+    const headers = Object.keys(rows[0]);
+    const lines = [headers.map(csvEscape).join(',')];
+    rows.forEach(r => lines.push(headers.map(h => csvEscape(r[h])).join(',')));
+    return lines.join('\n');
+  }
+
+  function download(filename, content, mime) {
+    const blob = new Blob([content], { type: mime });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  }
+
+  function addFieldRow(name = '', type = 'fullName') {
+    const row = document.createElement('div');
+    row.className = 'field-row';
+    const id = seedCounter++;
+    row.innerHTML = `
+      <input type="text" class="field-name" placeholder="field name" value="${name}" />
+      <select class="field-type"></select>
+      <input type="text" class="field-min range" placeholder="min" style="display:none;" />
+      <input type="text" class="field-max range" placeholder="max" style="display:none;" />
+      <button class="danger remove-field" type="button">Remove</button>
+    `;
+    const select = row.querySelector('.field-type');
+    FIELD_TYPES.forEach(t => {
+      const opt = document.createElement('option');
+      opt.value = t.value;
+      opt.textContent = t.label;
+      if (t.value === type) opt.selected = true;
+      select.appendChild(opt);
+    });
+
+    const minInput = row.querySelector('.field-min');
+    const maxInput = row.querySelector('.field-max');
+    function syncRangeVisibility() {
+      const isNumber = select.value === 'number';
+      minInput.style.display = isNumber ? '' : 'none';
+      maxInput.style.display = isNumber ? '' : 'none';
+      if (isNumber) {
+        if (!minInput.value) minInput.value = '0';
+        if (!maxInput.value) maxInput.value = '1000';
+      }
+    }
+    select.addEventListener('change', syncRangeVisibility);
+    syncRangeVisibility();
+
+    row.querySelector('.remove-field').addEventListener('click', () => row.remove());
+    document.getElementById('fields').appendChild(row);
+  }
+
+  document.getElementById('addFieldBtn').addEventListener('click', () => addFieldRow());
+
+  let lastGenerated = null;
+
+  document.getElementById('generateBtn').addEventListener('click', () => {
+    const schema = readSchema().map(f => ({
+      ...f,
+      min: isNaN(f.min) ? null : f.min,
+      max: isNaN(f.max) ? null : f.max,
+    }));
+    const count = Math.max(1, Math.min(100000, parseInt(document.getElementById('countInput').value, 10) || 1));
+
+    const start = performance.now();
+    lastGenerated = generate(schema, count);
+    const elapsed = (performance.now() - start).toFixed(1);
+
+    document.getElementById('preview').value = JSON.stringify(lastGenerated.slice(0, 50), null, 2);
+    document.getElementById('genMeta').textContent = `Generated ${count} record(s) in ${elapsed}ms. Showing first 50 in preview.`;
+  });
+
+  document.getElementById('downloadJsonBtn').addEventListener('click', () => {
+    if (!lastGenerated) return;
+    download('mock-data.json', JSON.stringify(lastGenerated, null, 2), 'application/json');
+  });
+  document.getElementById('downloadCsvBtn').addEventListener('click', () => {
+    if (!lastGenerated) return;
+    download('mock-data.csv', toCsv(lastGenerated), 'text/csv;charset=utf-8;');
+  });
+
+  // Default schema
+  addFieldRow('id', 'uuid');
+  addFieldRow('name', 'fullName');
+  addFieldRow('email', 'email');
+  addFieldRow('salary', 'number');
+  addFieldRow('active', 'boolean');
+</script>
+</body>
+</html>
