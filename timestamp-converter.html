@@ -1,0 +1,240 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Timestamp Converter</title>
+<style>
+  :root { --border: #d0d7de; --bg: #f6f8fa; }
+  * { box-sizing: border-box; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    margin: 0; padding: 20px; background: var(--bg); color: #1f2328;
+  }
+  h1 { font-size: 22px; margin: 0 0 16px; }
+  .columns { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  .card { background: white; border: 1px solid var(--border); border-radius: 6px; padding: 16px; }
+  .card h2 { font-size: 14px; margin: 0 0 10px; color: #57606a; }
+  .row { display: flex; gap: 8px; margin-bottom: 10px; align-items: center; }
+  .row label { flex: 0 0 90px; font-size: 13px; color: #57606a; }
+  input[type="text"], input[type="number"], select {
+    flex: 1; padding: 8px 10px; border: 1px solid var(--border); border-radius: 6px;
+    font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 13px;
+  }
+  button {
+    padding: 8px 16px; border-radius: 6px; border: 1px solid var(--border);
+    background: #2da44e; color: white; font-size: 14px; cursor: pointer;
+  }
+  button.secondary { background: white; color: #1f2328; }
+  button:hover { filter: brightness(0.95); }
+  .error { color: #c92a2a; font-size: 13px; margin-top: 6px; }
+  .results { margin-top: 16px; }
+  table { width: 100%; border-collapse: collapse; background: white; border: 1px solid var(--border); border-radius: 6px; overflow: hidden; }
+  td, th { padding: 8px 12px; text-align: left; font-size: 13px; border-bottom: 1px solid var(--border); }
+  th { color: #57606a; font-weight: 600; width: 200px; }
+  tr:last-child td, tr:last-child th { border-bottom: none; }
+  .copy-btn { padding: 3px 8px; font-size: 11px; margin-left: 8px; }
+  .relative { color: #57606a; font-style: italic; }
+  .diff-box { margin-top: 16px; }
+</style>
+</head>
+<body>
+  <h1>Timestamp Converter</h1>
+
+  <div class="columns">
+    <div class="card">
+      <h2>Unix → Readable</h2>
+      <div class="row">
+        <label>Timestamp</label>
+        <input type="text" id="unixInput" placeholder="1686823200" />
+        <select id="unixUnit">
+          <option value="seconds">seconds</option>
+          <option value="milliseconds">milliseconds</option>
+        </select>
+      </div>
+      <button id="unixToReadableBtn">Convert</button>
+      <div class="error" id="unixError"></div>
+    </div>
+
+    <div class="card">
+      <h2>Readable → Unix</h2>
+      <div class="row">
+        <label>Date/time</label>
+        <input type="text" id="readableInput" placeholder="2023-06-15T14:00:00Z or 2023-06-15 14:00" />
+      </div>
+      <button id="readableToUnixBtn">Convert</button>
+      <div class="error" id="readableError"></div>
+    </div>
+  </div>
+
+  <div class="results" id="results" style="display:none;">
+    <table id="resultsTable"></table>
+  </div>
+
+  <div class="card diff-box">
+    <h2>Difference between two dates</h2>
+    <div class="row">
+      <label>From</label>
+      <input type="text" id="diffFrom" placeholder="2023-06-15T14:00:00Z" />
+    </div>
+    <div class="row">
+      <label>To</label>
+      <input type="text" id="diffTo" placeholder="2023-06-17T10:30:00Z" />
+    </div>
+    <button id="diffBtn" class="secondary">Calculate difference</button>
+    <div class="error" id="diffError"></div>
+    <div id="diffResult"></div>
+  </div>
+
+<script>
+  const timezones = [
+    { label: 'UTC', tz: 'UTC' },
+    { label: 'Israel (IDT/IST)', tz: 'Asia/Jerusalem' },
+    { label: 'New York (EDT/EST)', tz: 'America/New_York' },
+    { label: 'London (BST/GMT)', tz: 'Europe/London' },
+    { label: 'Tokyo (JST)', tz: 'Asia/Tokyo' },
+    { label: 'Local (browser)', tz: Intl.DateTimeFormat().resolvedOptions().timeZone },
+  ];
+
+  function escapeHtml(str) {
+    return String(str).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  }
+
+  function formatInTimezone(date, tz) {
+    const fmt = new Intl.DateTimeFormat('en-CA', {
+      timeZone: tz,
+      year: 'numeric', month: '2-digit', day: '2-digit',
+      hour: '2-digit', minute: '2-digit', second: '2-digit',
+      hour12: false, timeZoneName: 'short'
+    });
+    const parts = fmt.formatToParts(date);
+    const get = type => parts.find(p => p.type === type)?.value || '';
+    const datePart = `${get('year')}-${get('month')}-${get('day')}`;
+    const timePart = `${get('hour')}:${get('minute')}:${get('second')}`;
+    return `${datePart} ${timePart} ${get('timeZoneName')}`;
+  }
+
+  function relativeTime(date) {
+    const now = Date.now();
+    const diffMs = date.getTime() - now;
+    const diffSec = Math.round(diffMs / 1000);
+    const absSec = Math.abs(diffSec);
+    const units = [
+      ['year', 31536000], ['month', 2592000], ['day', 86400],
+      ['hour', 3600], ['minute', 60], ['second', 1]
+    ];
+    for (const [unit, secs] of units) {
+      if (absSec >= secs || unit === 'second') {
+        const value = Math.round(diffSec / secs);
+        const rtf = new Intl.RelativeTimeFormat('en', { numeric: 'auto' });
+        return rtf.format(value, unit);
+      }
+    }
+  }
+
+  function renderResultsTable(date) {
+    const results = document.getElementById('results');
+    const table = document.getElementById('resultsTable');
+    const rows = [
+      ['ISO 8601', date.toISOString()],
+      ['Unix (seconds)', Math.floor(date.getTime() / 1000)],
+      ['Unix (milliseconds)', date.getTime()],
+      ['Relative', relativeTime(date)],
+      ...timezones.map(({ label, tz }) => [label, formatInTimezone(date, tz)]),
+    ];
+    table.innerHTML = rows.map(([label, value]) => `
+      <tr>
+        <th>${escapeHtml(label)}</th>
+        <td>${escapeHtml(value)}<button class="copy-btn secondary" data-copy="${escapeHtml(value)}">copy</button></td>
+      </tr>
+    `).join('');
+    results.style.display = 'block';
+    table.querySelectorAll('.copy-btn').forEach(btn => {
+      btn.addEventListener('click', () => copyText(btn.getAttribute('data-copy')));
+    });
+  }
+
+  async function copyText(text) {
+    try {
+      await navigator.clipboard.writeText(String(text));
+    } catch (e) {
+      const ta = document.createElement('textarea');
+      ta.value = String(text);
+      document.body.appendChild(ta);
+      ta.select();
+      document.execCommand('copy');
+      document.body.removeChild(ta);
+    }
+  }
+
+  function parseFlexibleDate(input) {
+    const trimmed = input.trim();
+    if (!trimmed) return null;
+    // Allow "YYYY-MM-DD HH:mm[:ss]" by converting space to 'T' for ISO parsing
+    const isoish = /^\d{4}-\d{2}-\d{2}[ T]/.test(trimmed) ? trimmed.replace(' ', 'T') : trimmed;
+    const date = new Date(isoish);
+    if (isNaN(date.getTime())) return null;
+    return date;
+  }
+
+  document.getElementById('unixToReadableBtn').addEventListener('click', () => {
+    const errorEl = document.getElementById('unixError');
+    errorEl.textContent = '';
+    const raw = document.getElementById('unixInput').value.trim();
+    const unit = document.getElementById('unixUnit').value;
+    if (!raw || !/^-?\d+(\.\d+)?$/.test(raw)) {
+      errorEl.textContent = 'Enter a numeric Unix timestamp.';
+      document.getElementById('results').style.display = 'none';
+      return;
+    }
+    const num = parseFloat(raw);
+    const ms = unit === 'seconds' ? num * 1000 : num;
+    const date = new Date(ms);
+    if (isNaN(date.getTime())) {
+      errorEl.textContent = 'Invalid timestamp.';
+      document.getElementById('results').style.display = 'none';
+      return;
+    }
+    renderResultsTable(date);
+  });
+
+  document.getElementById('readableToUnixBtn').addEventListener('click', () => {
+    const errorEl = document.getElementById('readableError');
+    errorEl.textContent = '';
+    const raw = document.getElementById('readableInput').value;
+    const date = parseFlexibleDate(raw);
+    if (!date) {
+      errorEl.textContent = 'Could not parse that date/time. Try ISO format, e.g. 2023-06-15T14:00:00Z';
+      document.getElementById('results').style.display = 'none';
+      return;
+    }
+    renderResultsTable(date);
+  });
+
+  document.getElementById('diffBtn').addEventListener('click', () => {
+    const errorEl = document.getElementById('diffError');
+    const resultEl = document.getElementById('diffResult');
+    errorEl.textContent = '';
+    resultEl.innerHTML = '';
+    const from = parseFlexibleDate(document.getElementById('diffFrom').value);
+    const to = parseFlexibleDate(document.getElementById('diffTo').value);
+    if (!from || !to) {
+      errorEl.textContent = 'Enter two valid date/time values.';
+      return;
+    }
+    let diffMs = Math.abs(to.getTime() - from.getTime());
+    const days = Math.floor(diffMs / 86400000);
+    diffMs -= days * 86400000;
+    const hours = Math.floor(diffMs / 3600000);
+    diffMs -= hours * 3600000;
+    const minutes = Math.floor(diffMs / 60000);
+    diffMs -= minutes * 60000;
+    const seconds = Math.floor(diffMs / 1000);
+    resultEl.innerHTML = `<p><strong>${days}d ${hours}h ${minutes}m ${seconds}s</strong> (${Math.abs(to.getTime() - from.getTime())} ms total)</p>`;
+  });
+
+  // Pre-fill with current time for convenience
+  document.getElementById('unixInput').value = Math.floor(Date.now() / 1000);
+</script>
+</body>
+</html>
